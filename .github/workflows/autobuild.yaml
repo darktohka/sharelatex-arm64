@@ -37,19 +37,23 @@ jobs:
       - name: Build base image
         working-directory: "${{ github.workspace }}/overleaf/server-ce"
         run: |
+          mv Dockerfile actual-dockerfile && \
+          mv Dockerfile-base Dockerfile && \
           ${{ matrix.buildctl }} build \
             --frontend dockerfile.v0 \
             --local context=. \
-            --local dockerfile=./Dockerfile-base \
+            --local dockerfile=. \
             --opt platform="linux/${{ matrix.architecture }}" \
             --output type=image,\"name=${{ secrets.DOCKER_TAG }}:base-${{ matrix.architecture }}\",push=true,store=false
       - name: Build image
         working-directory: "${{ github.workspace }}/overleaf/server-ce"
         run: |
+          mv Dockerfile base-dockerfile && \
+          mv actual-dockerfile Dockerfile && \
           ${{ matrix.buildctl }} build \
             --frontend dockerfile.v0 \
             --local context=. \
-            --local dockerfile=./Dockerfile \
+            --local dockerfile=. \
             --opt platform="linux/${{ matrix.architecture }}" \
             --opt build-arg:SHARELATEX_BASE_TAG="${{ secrets.DOCKER_TAG }}:base-${{ matrix.architecture }}" \
             --output type=image,\"name=${{ secrets.DOCKER_TAG }}:${{ matrix.architecture }}\",push=true,store=false
