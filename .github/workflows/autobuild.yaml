@@ -32,25 +32,25 @@ jobs:
           curl -sL https://github.com/moby/buildkit/releases/download/v0.12.5/buildkit-v0.12.5.linux-amd64.tar.gz | sudo tar -xz  -C /usr && \
           sudo buildkitd &
       - name: Build base image
-        working-directory: "${{ github.workspace }}/overleaf/server-ce"
+        working-directory: "${{ github.workspace }}/overleaf"
         run: |
           mv Dockerfile actual-dockerfile && \
           mv Dockerfile-base Dockerfile && \
           ${{ matrix.buildctl }} build \
             --frontend dockerfile.v0 \
             --local context=. \
-            --local dockerfile=. \
+            --local dockerfile=server-ce \
             --opt platform="linux/${{ matrix.architecture }}" \
             --output type=image,\"name=${{ secrets.DOCKER_TAG }}:base-${{ matrix.architecture }}\",push=true,store=false
       - name: Build image
-        working-directory: "${{ github.workspace }}/overleaf/server-ce"
+        working-directory: "${{ github.workspace }}/overleaf"
         run: |
           mv Dockerfile base-dockerfile && \
           mv actual-dockerfile Dockerfile && \
           ${{ matrix.buildctl }} build \
             --frontend dockerfile.v0 \
             --local context=. \
-            --local dockerfile=. \
+            --local dockerfile=server-ce \
             --opt platform="linux/${{ matrix.architecture }}" \
             --opt build-arg:SHARELATEX_BASE_TAG="${{ secrets.DOCKER_TAG }}:base-${{ matrix.architecture }}" \
             --output type=image,\"name=${{ secrets.DOCKER_TAG }}:${{ matrix.architecture }}\",push=true,store=false
