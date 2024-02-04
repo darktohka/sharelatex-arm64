@@ -1,0 +1,55 @@
+name: Build Overleaf
+
+on: [push, workflow_dispatch, repository_dispatch]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - runs-on: ubuntu-latest
+            architecture: amd64
+            buildctl: "sudo buildctl"
+          - runs-on: ARM64
+            architecture: arm64
+            buildctl: "buildctl"
+    runs-on: ${{ matrix.runs-on }}
+    name: Build ${{ matrix.architecture }}
+    steps:
+      - name: Checkout Overleaf
+        uses: actions/checkout@v4
+        with:
+          repository: "overleaf/overleaf"
+          ref: "main"
+          path: "${{ github.workspace}}/overleaf"
+      - name: Login into Docker
+        shell: bash
+        run: |
+          mkdir -p ~/.docker
+          jq --arg hostname "${{ secrets.DOCKER_HOST }}" --arg username "${{ secrets.DOCKER_USERNAME }}" --arg password "${{ secrets.DOCKER_PASSWORD }}" \
+            '. + {"auths": (.auths + {($hostname): { "auth": "\($username):\($password)" | @base64 } } ) }' -n > ~/.docker/config.json
+      - name: Set up Buildkit
+        if: ${{ matrix.architecture == 'amd64' }}
+        shell: bash
+        run: |
+          curl -sL https://github.com/moby/buildkit/releases/download/v0.12.5/buildkit-v0.12.5.linux-amd64.tar.gz | sudo tar -xz  -C /usr && \
+          sudo buildkitd &
+      - name: Build base image
+        working-directory: "${{ github.workspace }}/overleaf/server-ce"
+        run: |
+          ${{ matrix.buildctl }} build \
+            --frontend dockerfile.v0 \
+            --local context=. \
+            --local dockerfile=./Dockerfile-base \
+            --opt platform="linux/${{ matrix.architecture }}" \
+            --output type=image,\"name=${{ secrets.DOCKER_TAG }}:base-${{ matrix.architecture }}\",push=true,store=false
+      - name: Build image
+        working-directory: "${{ github.workspace }}/overleaf/server-ce"
+        run: |
+          ${{ matrix.buildctl }} build \
+            --frontend dockerfile.v0 \
+            --local context=. \
+            --local dockerfile=./Dockerfile \
+            --opt platform="linux/${{ matrix.architecture }}" \
+            --opt build-arg:SHARELATEX_BASE_TAG="${{ secrets.DOCKER_TAG }}:base-${{ matrix.architecture }}" \
+            --output type=image,\"name=${{ secrets.DOCKER_TAG }}:${{ matrix.architecture }}\",push=true,store=false
