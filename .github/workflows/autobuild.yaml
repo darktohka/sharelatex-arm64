@@ -7,9 +7,6 @@ jobs:
     strategy:
       matrix:
         include:
-          - runs-on: ubuntu-latest
-            architecture: amd64
-            buildctl: "sudo buildctl"
           - runs-on: ARM64
             architecture: arm64
             buildctl: "buildctl"
