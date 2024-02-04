@@ -34,8 +34,8 @@ jobs:
       - name: Build base image
         working-directory: "${{ github.workspace }}/overleaf"
         run: |
-          mv Dockerfile actual-dockerfile && \
-          mv Dockerfile-base Dockerfile && \
+          mv server-ce/Dockerfile server-ce/actual-dockerfile && \
+          mv server-ce/Dockerfile-base server-ce/Dockerfile && \
           ${{ matrix.buildctl }} build \
             --frontend dockerfile.v0 \
             --local context=. \
@@ -45,8 +45,8 @@ jobs:
       - name: Build image
         working-directory: "${{ github.workspace }}/overleaf"
         run: |
-          mv Dockerfile base-dockerfile && \
-          mv actual-dockerfile Dockerfile && \
+          mv server-ce/Dockerfile server-ce/base-dockerfile && \
+          mv server-ce/actual-dockerfile server-ce/Dockerfile && \
           ${{ matrix.buildctl }} build \
             --frontend dockerfile.v0 \
             --local context=. \
