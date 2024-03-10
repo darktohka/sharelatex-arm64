@@ -36,6 +36,7 @@ jobs:
         run: |
           mv server-ce/Dockerfile server-ce/actual-dockerfile && \
           mv server-ce/Dockerfile-base server-ce/Dockerfile && \
+          sed -Ei 's/scheme-basic/scheme-full/' server-ce/Dockerfile && \
           ${{ matrix.buildctl }} build \
             --frontend dockerfile.v0 \
             --local context=. \
