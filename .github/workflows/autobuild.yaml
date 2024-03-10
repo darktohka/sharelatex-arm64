@@ -1,6 +1,20 @@
 name: Build Overleaf
 
-on: [push, workflow_dispatch, repository_dispatch]
+on:
+  push:
+  repository_dispatch:
+  workflow_dispatch:
+    inputs:
+      buildBaseImage:
+        description: 'Build base image'
+        required: false
+        default: true
+        type: boolean
+      buildImage:
+        description: 'Build image'
+        required: false
+        default: true
+        type: boolean
 
 jobs:
   build:
@@ -33,6 +47,7 @@ jobs:
           sudo buildkitd &
       - name: Build base image
         working-directory: "${{ github.workspace }}/overleaf"
+        if: ${{ inputs.buildBaseImage }}
         run: |
           mv server-ce/Dockerfile server-ce/actual-dockerfile && \
           mv server-ce/Dockerfile-base server-ce/Dockerfile && \
@@ -42,16 +57,17 @@ jobs:
             --local context=. \
             --local dockerfile=server-ce \
             --opt platform="linux/${{ matrix.architecture }}" \
-            --output type=image,\"name=${{ secrets.DOCKER_TAG }}:base-${{ matrix.architecture }}\",push=true,store=false
+            --output type=image,\"name=${{ secrets.DOCKER_TAG }}:base-${{ matrix.architecture }}\",push=true,store=false && \
+          mv server-ce/Dockerfile server-ce/Dockerfile-base && \
+          mv server-ce/actual-dockerfile server-ce/Dockerfile
       - name: Build image
         working-directory: "${{ github.workspace }}/overleaf"
+        if: ${{ inputs.buildImage }}
         run: |
-          mv server-ce/Dockerfile server-ce/base-dockerfile && \
-          mv server-ce/actual-dockerfile server-ce/Dockerfile && \
           ${{ matrix.buildctl }} build \
             --frontend dockerfile.v0 \
             --local context=. \
             --local dockerfile=server-ce \
             --opt platform="linux/${{ matrix.architecture }}" \
-            --opt build-arg:SHARELATEX_BASE_TAG="${{ secrets.DOCKER_TAG }}:base-${{ matrix.architecture }}" \
+            --opt build-arg:OVERLEAF_BASE_TAG="${{ secrets.DOCKER_TAG }}:base-${{ matrix.architecture }}" \
             --output type=image,\"name=${{ secrets.DOCKER_TAG }}:${{ matrix.architecture }}\",push=true,store=false
