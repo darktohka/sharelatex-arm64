@@ -1,0 +1,368 @@
+From 2bdfd80023f125350934a37c3bcdeb8f0386071f Mon Sep 17 00:00:00 2001
+From: Disyer <daniel@tohka.us>
+Date: Thu, 7 May 2026 13:01:35 +0300
+Subject: [PATCH] feat: add self-registration with email verification and
+ Cloudflare Turnstile
+
+Replace the static "Please contact admin" registration page with a
+self-registration flow: user enters email, receives an activation link,
+and sets a password on the activation page. This reuses the existing
+activation email infrastructure (OneTimeToken, 'registered' email
+template, /user/activate page).
+
+Add Cloudflare Turnstile captcha support alongside reCAPTCHA:
+  - New TurnstileMiddleware validates turnstile tokens against
+    Cloudflare's siteverify API.
+  - Configured via TURNSTILE_SITE_KEY and TURNSTILE_SECRET_KEY env vars.
+  - Turnstile widget is rendered on the register page when configured.
+
+Add OVERLEAF_ALLOWED_REGISTRATION_DOMAINS env var to restrict
+self-registration to specific email domains (comma-separated).
+When unset, registration is open to all domains.
+---
+ server-ce/config/settings.js                  |  6 ++
+ .../Features/Captcha/TurnstileMiddleware.mjs  | 67 +++++++++++++++++++
+ .../src/Features/User/UserPagesController.mjs | 46 +++++++++++++
+ services/web/app/src/router.mjs               | 15 +++++
+ services/web/app/views/user/register.pug      | 47 ++++++++++---
+ .../app/views/user/register_check_email.pug   | 20 ++++++
+ services/web/config/settings.defaults.js      | 18 +++++
+ services/web/locales/en.json                  |  4 +-
+ 8 files changed, 214 insertions(+), 9 deletions(-)
+ create mode 100644 services/web/app/src/Features/Captcha/TurnstileMiddleware.mjs
+ create mode 100644 services/web/app/views/user/register_check_email.pug
+
+diff --git a/server-ce/config/settings.js b/server-ce/config/settings.js
+index 7d9fd7702e..54c2e406d3 100644
+--- a/server-ce/config/settings.js
++++ b/server-ce/config/settings.js
+@@ -210,6 +210,12 @@ const settings = {
+   // contact for this installation of Overleaf Community Edition.
+   adminEmail: process.env.OVERLEAF_ADMIN_EMAIL || 'placeholder@example.com',
+ 
++  // Comma-separated list of email domains allowed to self-register.
++  // If empty or not set, registration is open to all domains.
++  allowedRegistrationDomains: process.env.OVERLEAF_ALLOWED_REGISTRATION_DOMAINS
++    ? process.env.OVERLEAF_ALLOWED_REGISTRATION_DOMAINS.split(',').map(d => d.trim().toLowerCase())
++    : undefined,
++
+   // If provided, a sessionSecret is used to sign cookies so that they cannot be
+   // spoofed. This is recommended.
+   security: {
+diff --git a/services/web/app/src/Features/Captcha/TurnstileMiddleware.mjs b/services/web/app/src/Features/Captcha/TurnstileMiddleware.mjs
+new file mode 100644
+index 0000000000..e5c751649d
+--- /dev/null
++++ b/services/web/app/src/Features/Captcha/TurnstileMiddleware.mjs
+@@ -0,0 +1,67 @@
++import { fetchJson } from '@overleaf/fetch-utils'
++import logger from '@overleaf/logger'
++import Settings from '@overleaf/settings'
++import Metrics from '@overleaf/metrics'
++import OError from '@overleaf/o-error'
++import { expressify } from '@overleaf/promise-utils'
++
++function respondInvalidTurnstile(req, res) {
++  res.status(400).json({
++    errorReason: 'cannot_verify_user_not_robot',
++    message: {
++      text: req.i18n.translate('cannot_verify_user_not_robot'),
++    },
++  })
++}
++
++function validateTurnstile(action) {
++  return expressify(async function (req, res, next) {
++    if (!Settings.turnstile?.siteKey || !Settings.turnstile?.secretKey) {
++      Metrics.inc('turnstile', 1, { path: action, status: 'disabled' })
++      return next()
++    }
++    if (Settings.turnstile.disabled?.[action]) {
++      Metrics.inc('turnstile', 1, { path: action, status: 'disabled' })
++      return next()
++    }
++
++    const turnstileResponse = req.body['cf-turnstile-response']
++    if (!turnstileResponse) {
++      Metrics.inc('turnstile', 1, { path: action, status: 'missing' })
++      return respondInvalidTurnstile(req, res)
++    }
++
++    let body
++    try {
++      body = await fetchJson(Settings.turnstile.endpoint, {
++        method: 'POST',
++        body: new URLSearchParams([
++          ['secret', Settings.turnstile.secretKey],
++          ['response', turnstileResponse],
++        ]),
++      })
++    } catch (err) {
++      Metrics.inc('turnstile', 1, { path: action, status: 'error' })
++      throw OError.tag(err, 'failed turnstile siteverify request', {
++        body: err.body,
++      })
++    }
++
++    if (!body.success) {
++      logger.warn(
++        { statusCode: 200, body },
++        'failed turnstile siteverify request'
++      )
++      Metrics.inc('turnstile', 1, { path: action, status: 'failed' })
++      return respondInvalidTurnstile(req, res)
++    }
++
++    Metrics.inc('turnstile', 1, { path: action, status: 'solved' })
++    next()
++  })
++}
++
++export default {
++  respondInvalidTurnstile,
++  validateTurnstile,
++}
+diff --git a/services/web/app/src/Features/User/UserPagesController.mjs b/services/web/app/src/Features/User/UserPagesController.mjs
+index ef7a5fd7e5..d4a5112b5b 100644
+--- a/services/web/app/src/Features/User/UserPagesController.mjs
++++ b/services/web/app/src/Features/User/UserPagesController.mjs
+@@ -1,4 +1,5 @@
+ import UserGetter from './UserGetter.mjs'
++import UserRegistrationHandler from './UserRegistrationHandler.mjs'
+ import OError from '@overleaf/o-error'
+ import UserSessionsManager from './UserSessionsManager.mjs'
+ import logger from '@overleaf/logger'
+@@ -11,6 +12,8 @@ import { expressify } from '@overleaf/promise-utils'
+ import Features from '../../infrastructure/Features.mjs'
+ import Modules from '../../infrastructure/Modules.mjs'
+ import SplitTestHandler from '../SplitTests/SplitTestHandler.mjs'
++import Analytics from '../Analytics/AnalyticsManager.mjs'
++import EmailHelper from '../Helpers/EmailHelper.mjs'
+ 
+ async function settingsPage(req, res) {
+   const userId = SessionManager.getLoggedInUserId(req.session)
+@@ -235,6 +238,46 @@ async function emailPreferencesPage(req, res) {
+   })
+ }
+ 
++async function register(req, res) {
++  const email = EmailHelper.parseEmail(req.body.email)
++  if (!email) {
++    return res.status(400).json({
++      message: { type: 'error', key: 'request-not-valid' },
++    })
++  }
++
++  const domain = email.split('@')[1]?.toLowerCase()
++  const allowedDomains = Settings.allowedRegistrationDomains
++  if (allowedDomains && allowedDomains.length > 0) {
++    if (!domain || !allowedDomains.includes(domain)) {
++      return res.status(403).json({
++        message: { type: 'error', key: 'domain-not-allowed' },
++      })
++    }
++  }
++
++  try {
++    await UserRegistrationHandler.promises.registerNewUserAndSendActivationEmail(
++      email
++    )
++  } catch (err) {
++    if (err.message === 'EmailAlreadyRegistered') {
++      return res.status(409).json({
++        message: { type: 'error', key: 'email-already-registered' },
++      })
++    }
++    throw err
++  }
++
++  Analytics.recordEventForUserInBackground(email, 'user-registered', {})
++
++  res.json({ redir: '/register/check-email' })
++}
++
++function checkEmailPage(req, res) {
++  res.render('user/register_check_email', { title: 'register' })
++}
++
+ const UserPagesController = {
+   accountSuspended: expressify(accountSuspended),
+   logout: expressify(logout),
+@@ -255,6 +298,9 @@ const UserPagesController = {
+     })
+   },
+ 
++  register: expressify(register),
++  checkEmailPage,
++
+   loginPage(req, res) {
+     // if user is being sent to /login with explicit redirect (redir=/foo),
+     // such as being sent from the editor to /login, then set the redirect explicitly
+diff --git a/services/web/app/src/router.mjs b/services/web/app/src/router.mjs
+index 8e27a91563..37e4717486 100644
+--- a/services/web/app/src/router.mjs
++++ b/services/web/app/src/router.mjs
+@@ -58,6 +58,7 @@ import SystemMessageController from './Features/SystemMessages/SystemMessageCont
+ import AnalyticsRegistrationSourceMiddleware from './Features/Analytics/AnalyticsRegistrationSourceMiddleware.mjs'
+ import AnalyticsUTMTrackingMiddleware from './Features/Analytics/AnalyticsUTMTrackingMiddleware.mjs'
+ import CaptchaMiddleware from './Features/Captcha/CaptchaMiddleware.mjs'
++import TurnstileMiddleware from './Features/Captcha/TurnstileMiddleware.mjs'
+ import UnsupportedBrowserMiddleware from './infrastructure/UnsupportedBrowserMiddleware.mjs'
+ import logger from '@overleaf/logger'
+ import _ from 'lodash'
+@@ -284,6 +285,20 @@ async function initialize(webRouter, privateApiRouter, publicApiRouter) {
+ 
+   if (Features.hasFeature('registration-page')) {
+     webRouter.get('/register', UserPagesController.registerPage)
++    webRouter.get(
++      '/register/check-email',
++      UserPagesController.checkEmailPage
++    )
++    AuthenticationController.addEndpointToLoginWhitelist('/register')
++    AuthenticationController.addEndpointToLoginWhitelist(
++      '/register/check-email'
++    )
++    webRouter.post(
++      '/register',
++      RateLimiterMiddleware.rateLimit(overleafLoginRateLimiter),
++      TurnstileMiddleware.validateTurnstile('register'),
++      UserPagesController.register
++    )
+     AuthenticationController.addEndpointToLoginWhitelist('/register')
+   }
+ 
+diff --git a/services/web/app/views/user/register.pug b/services/web/app/views/user/register.pug
+index b7e602e6e3..451d789608 100644
+--- a/services/web/app/views/user/register.pug
++++ b/services/web/app/views/user/register.pug
+@@ -24,13 +24,44 @@ block content
+ 							|
+ 							a(href='/login') #{translate("login_here")}
+ 
+-			.row
+-				.col-lg-8.offset-lg-2.col-xl-6.offset-xl-3
+-					.page-header
+-						h1 #{translate("register")}
+-					p
+-						| Please contact
++		.row
++			.col-lg-8.offset-lg-2.col-xl-6.offset-xl-3
++				.page-header
++					h1 #{translate("register")}
++				- const hasDomainRestriction = settings.allowedRegistrationDomains && settings.allowedRegistrationDomains.length > 0
++				if hasDomainRestriction
++					p.text-muted
++						| Registration is restricted to the following email domains:
+ 						|
+-						strong #{settings.adminEmail}
++						strong #{settings.allowedRegistrationDomains.join(', ')}
++				- const showTurnstile = settings.turnstile && settings.turnstile.siteKey && !(settings.turnstile.disabled && settings.turnstile.disabled.register)
++				form(name='registerForm' data-ol-async-form action='/register' method='POST')
++					input(name='_csrf' type='hidden' value=csrfToken)
++					+formMessagesNewStyle
++					+customFormMessageNewStyle('domain-not-allowed', 'danger')
++						| This email domain is not allowed for registration.
++					+customFormMessageNewStyle('email-already-registered', 'danger')
++						| #{translate('email_already_registered')}
++					+customFormMessageNewStyle('request-not-valid', 'danger')
++						| Invalid registration request.
++					if showTurnstile
++						script(src='https://challenges.cloudflare.com/turnstile/v0/api.js' async defer)
++						.cf-turnstile(data-sitekey=settings.turnstile.siteKey data-size='invisible')
++					.form-group
++						label(for='email') #{translate("email")}
++						input#email.form-control(
++							name='email'
++							type='email'
++							required
++							autofocus='true'
++							autocomplete='username'
++						)
++					.actions
++						button.btn-primary.btn(type='submit' data-ol-disabled-inflight)
++							span(data-ol-inflight='idle') #{translate("register")}
++							span(hidden data-ol-inflight='pending') #{translate("sending")}…
++					hr
++					p.text-center
++						| #{translate("already_have_sl_account")}
+ 						|
+-						| to create an account.
++						a(href='/login') #{translate("login_here")}
+diff --git a/services/web/app/views/user/register_check_email.pug b/services/web/app/views/user/register_check_email.pug
+new file mode 100644
+index 0000000000..47ea0c1d4f
+--- /dev/null
++++ b/services/web/app/views/user/register_check_email.pug
+@@ -0,0 +1,20 @@
++extends ../layout-website-redesign
++
++block vars
++	- isWebsiteRedesign = true
++
++block content
++	main#main-content.content
++		.container
++			.row
++				.col-lg-8.offset-lg-2.col-xl-6.offset-xl-3
++					.page-header
++						h1 #{translate("register")}
++					.card
++						.card-body.text-center
++							p
++								| #{translate("please_check_email_for_activation_link")}
++							p
++								| #{translate("did_not_receive_email")}
++							p
++								a(href='/login') #{translate("login_here")}
+diff --git a/services/web/config/settings.defaults.js b/services/web/config/settings.defaults.js
+index 5d289236f0..c5df5f10dd 100644
+--- a/services/web/config/settings.defaults.js
++++ b/services/web/config/settings.defaults.js
+@@ -797,6 +797,11 @@ module.exports = {
+   appName: process.env.APP_NAME || 'Overleaf (Community Edition)',
+ 
+   adminEmail: process.env.ADMIN_EMAIL || 'placeholder@example.com',
++
++  allowedRegistrationDomains: process.env.OVERLEAF_ALLOWED_REGISTRATION_DOMAINS
++    ? process.env.OVERLEAF_ALLOWED_REGISTRATION_DOMAINS.split(',').map(d => d.trim().toLowerCase())
++    : undefined,
++
+   adminDomains: process.env.ADMIN_DOMAINS
+     ? JSON.parse(process.env.ADMIN_DOMAINS)
+     : undefined,
+@@ -841,6 +846,19 @@ module.exports = {
+     },
+   },
+ 
++  // Cloudflare Turnstile captcha configuration.
++  // When siteKey and secretKey are set, Turnstile is used instead of reCAPTCHA.
++  turnstile: {
++    siteKey: process.env.TURNSTILE_SITE_KEY,
++    secretKey: process.env.TURNSTILE_SECRET_KEY,
++    endpoint:
++      process.env.TURNSTILE_ENDPOINT ||
++      'https://challenges.cloudflare.com/turnstile/v0/siteverify',
++    disabled: {
++      register: !process.env.TURNSTILE_SITE_KEY,
++    },
++  },
++
+   customisation: {},
+ 
+   redirects: {
+diff --git a/services/web/locales/en.json b/services/web/locales/en.json
+index 88663462c9..66d66795be 100644
+--- a/services/web/locales/en.json
++++ b/services/web/locales/en.json
+@@ -3164,5 +3164,7 @@
+   "zotero_reference_loading_error_forbidden": "Could not load references from Zotero, please re-link your account and try again",
+   "zotero_sync_description": "With the Zotero integration you can import your references from Zotero into your __appName__ projects.",
+   "zotero_upgrade_prompt_content": "Link your Zotero account to search and add your references from Zotero directly in your project—they’ll automatically be added to your .bib file. Or import them as a file into your __appName__ projects.",
+-  "zotero_upgrade_prompt_title": "Cite from Zotero"
++  "zotero_upgrade_prompt_title": "Cite from Zotero",
++  "please_check_email_for_activation_link": "Please check your email for an activation link.",
++  "did_not_receive_email": "Did not receive the email? Check your spam folder or contact the administrator."
+ }
+-- 
+2.53.0
+
