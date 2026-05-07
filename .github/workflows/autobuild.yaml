@@ -27,12 +27,36 @@ jobs:
     runs-on: ${{ matrix.runs-on }}
     name: Build ${{ matrix.architecture }}
     steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+        with:
+          path: "${{ github.workspace }}/repo"
       - name: Checkout Overleaf
         uses: actions/checkout@v6
         with:
           repository: "overleaf/overleaf"
           ref: "main"
-          path: "${{ github.workspace}}/overleaf"
+          path: "${{ github.workspace }}/overleaf"
+      - name: Apply patches
+        shell: bash
+        working-directory: "${{ github.workspace }}/overleaf"
+        run: |
+          shopt -s nullglob
+          patches=("${{ github.workspace }}/repo/patches/"*.patch)
+          if [ ${#patches[@]} -eq 0 ]; then
+            echo "No patches found, skipping."
+            exit 0
+          fi
+          for patch in "${patches[@]}"; do
+            echo "::group::Applying $(basename "$patch")"
+            if ! git am --3way < "$patch"; then
+              echo "::error::Failed to apply patch: $patch"
+              git am --abort 2>/dev/null || true
+              exit 1
+            fi
+            echo "::endgroup::"
+          done
+          echo "All patches applied successfully."
       - name: Login into Docker
         shell: bash
         run: |

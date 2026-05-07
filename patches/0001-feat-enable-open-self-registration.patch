@@ -1,0 +1,235 @@
+From 67fa2cdf50fd3e5dbc403f446ca7262216a7dd06 Mon Sep 17 00:00:00 2001
+From: Disyer <daniel@tohka.us>
+Date: Thu, 7 May 2026 12:31:28 +0300
+Subject: [PATCH] feat: enable open self-registration with optional domain
+ restriction
+
+Replace the static "Please contact admin" registration page with a
+full registration form (email + password). On success, the user is
+automatically logged in and redirected to /project.
+
+Add OVERLEAF_ALLOWED_REGISTRATION_DOMAINS env var to restrict
+self-registration to specific email domains (comma-separated).
+When unset, registration is open to all domains.
+---
+ server-ce/config/settings.js                  |  6 ++
+ .../src/Features/User/UserPagesController.mjs | 67 +++++++++++++++++++
+ services/web/app/src/router.mjs               |  6 ++
+ services/web/app/views/user/register.pug      | 54 ++++++++++++---
+ services/web/config/settings.defaults.js      |  5 ++
+ 5 files changed, 130 insertions(+), 8 deletions(-)
+
+diff --git a/server-ce/config/settings.js b/server-ce/config/settings.js
+index 7d9fd7702e..54c2e406d3 100644
+--- a/server-ce/config/settings.js
++++ b/server-ce/config/settings.js
+@@ -210,6 +210,12 @@ const settings = {
+   // contact for this installation of Overleaf Community Edition.
+   adminEmail: process.env.OVERLEAF_ADMIN_EMAIL || 'placeholder@example.com',
+ 
++  // Comma-separated list of email domains allowed to self-register.
++  // If empty or not set, registration is open to all domains.
++  allowedRegistrationDomains: process.env.OVERLEAF_ALLOWED_REGISTRATION_DOMAINS
++    ? process.env.OVERLEAF_ALLOWED_REGISTRATION_DOMAINS.split(',').map(d => d.trim().toLowerCase())
++    : undefined,
++
+   // If provided, a sessionSecret is used to sign cookies so that they cannot be
+   // spoofed. This is recommended.
+   security: {
+diff --git a/services/web/app/src/Features/User/UserPagesController.mjs b/services/web/app/src/Features/User/UserPagesController.mjs
+index ef7a5fd7e5..5c9326e1b7 100644
+--- a/services/web/app/src/Features/User/UserPagesController.mjs
++++ b/services/web/app/src/Features/User/UserPagesController.mjs
+@@ -1,4 +1,5 @@
+ import UserGetter from './UserGetter.mjs'
++import UserRegistrationHandler from './UserRegistrationHandler.mjs'
+ import OError from '@overleaf/o-error'
+ import UserSessionsManager from './UserSessionsManager.mjs'
+ import logger from '@overleaf/logger'
+@@ -11,6 +12,9 @@ import { expressify } from '@overleaf/promise-utils'
+ import Features from '../../infrastructure/Features.mjs'
+ import Modules from '../../infrastructure/Modules.mjs'
+ import SplitTestHandler from '../SplitTests/SplitTestHandler.mjs'
++import LoginRateLimiter from '../Security/LoginRateLimiter.mjs'
++import Analytics from '../Analytics/AnalyticsManager.mjs'
++import EmailHelper from '../Helpers/EmailHelper.mjs'
+ 
+ async function settingsPage(req, res) {
+   const userId = SessionManager.getLoggedInUserId(req.session)
+@@ -235,6 +239,67 @@ async function emailPreferencesPage(req, res) {
+   })
+ }
+ 
++async function register(req, res) {
++  const email = EmailHelper.parseEmail(req.body.email)
++  if (!email) {
++    return res.status(400).json({
++      message: { type: 'error', key: 'request-not-valid' },
++    })
++  }
++
++  const domain = email.split('@')[1]?.toLowerCase()
++  const allowedDomains = Settings.allowedRegistrationDomains
++  if (allowedDomains && allowedDomains.length > 0) {
++    if (!domain || !allowedDomains.includes(domain)) {
++      return res.status(403).json({
++        message: { type: 'error', key: 'domain-not-allowed' },
++      })
++    }
++  }
++
++  let user
++  try {
++    user = await UserRegistrationHandler.promises.registerNewUser({
++      email,
++      password: req.body.password,
++    })
++  } catch (err) {
++    if (err.message === 'EmailAlreadyRegistered') {
++      return res.status(409).json({
++        message: { type: 'error', key: 'email-already-registered' },
++      })
++    }
++    if (err.message === 'request is not valid') {
++      return res.status(400).json({
++        message: { type: 'error', key: 'invalid-password' },
++      })
++    }
++    throw err
++  }
++
++  req.session.justRegistered = true
++
++  await new Promise((resolve, reject) => {
++    req.login(user, { keepSessionInfo: true }, err => {
++      if (err) return reject(err)
++      delete req.session.__tmp
++      delete req.session.csrfSecret
++      req.session.analyticsId = user.analyticsId
++      req.session.save(err => {
++        if (err) return reject(err)
++        UserSessionsManager.trackSession(user, req.sessionID, () => {})
++        resolve()
++      })
++    })
++  })
++
++  LoginRateLimiter.recordSuccessfulLogin(user.email, () => {})
++  Analytics.recordEventForUserInBackground(user._id, 'user-registered', {})
++  Analytics.identifyUser(user._id, req.session.analyticsId, true)
++
++  res.json({ redir: '/project' })
++}
++
+ const UserPagesController = {
+   accountSuspended: expressify(accountSuspended),
+   logout: expressify(logout),
+@@ -255,6 +320,8 @@ const UserPagesController = {
+     })
+   },
+ 
++  register: expressify(register),
++
+   loginPage(req, res) {
+     // if user is being sent to /login with explicit redirect (redir=/foo),
+     // such as being sent from the editor to /login, then set the redirect explicitly
+diff --git a/services/web/app/src/router.mjs b/services/web/app/src/router.mjs
+index 8e27a91563..655a4f7ddd 100644
+--- a/services/web/app/src/router.mjs
++++ b/services/web/app/src/router.mjs
+@@ -285,6 +285,12 @@ async function initialize(webRouter, privateApiRouter, publicApiRouter) {
+   if (Features.hasFeature('registration-page')) {
+     webRouter.get('/register', UserPagesController.registerPage)
+     AuthenticationController.addEndpointToLoginWhitelist('/register')
++    webRouter.post(
++      '/register',
++      RateLimiterMiddleware.rateLimit(overleafLoginRateLimiter),
++      UserPagesController.register
++    )
++    AuthenticationController.addEndpointToLoginWhitelist('/register')
+   }
+ 
+   EditorRouter.apply(webRouter, privateApiRouter)
+diff --git a/services/web/app/views/user/register.pug b/services/web/app/views/user/register.pug
+index b7e602e6e3..ce1018803f 100644
+--- a/services/web/app/views/user/register.pug
++++ b/services/web/app/views/user/register.pug
+@@ -24,13 +24,51 @@ block content
+ 							|
+ 							a(href='/login') #{translate("login_here")}
+ 
+-			.row
+-				.col-lg-8.offset-lg-2.col-xl-6.offset-xl-3
+-					.page-header
+-						h1 #{translate("register")}
+-					p
+-						| Please contact
++		.row
++			.col-lg-8.offset-lg-2.col-xl-6.offset-xl-3
++				.page-header
++					h1 #{translate("register")}
++				- const hasDomainRestriction = settings.allowedRegistrationDomains && settings.allowedRegistrationDomains.length > 0
++				if hasDomainRestriction
++					p.text-muted
++						| Registration is restricted to the following email domains:
+ 						|
+-						strong #{settings.adminEmail}
++						strong #{settings.allowedRegistrationDomains.join(', ')}
++				form(name='registerForm' data-ol-async-form action='/register' method='POST')
++					input(name='_csrf' type='hidden' value=csrfToken)
++					+formMessagesNewStyle
++					+customFormMessageNewStyle('domain-not-allowed', 'danger')
++						| This email domain is not allowed for registration.
++					+customFormMessageNewStyle('email-already-registered', 'danger')
++						| #{translate('email_already_registered')}
++					+customFormMessageNewStyle('invalid-password', 'danger')
++						| #{translate('invalid_password')}
++					+customFormMessageNewStyle('request-not-valid', 'danger')
++						| Invalid registration request.
++					.form-group
++						label(for='email') #{translate("email")}
++						input#email.form-control(
++							name='email'
++							type='email'
++							required
++							autofocus='true'
++							autocomplete='username'
++						)
++					.form-group
++						label(for='password') #{translate("password")}
++						input#password.form-control(
++							name='password'
++							type='password'
++							autocomplete='new-password'
++							required
++							minlength=8
++						)
++					.actions
++						button.btn-primary.btn(type='submit' data-ol-disabled-inflight)
++							span(data-ol-inflight='idle') #{translate("register")}
++							span(hidden data-ol-inflight='pending') #{translate("registering")}…
++					hr
++					p.text-center
++						| #{translate("already_have_sl_account")}
+ 						|
+-						| to create an account.
++						a(href='/login') #{translate("login_here")}
+diff --git a/services/web/config/settings.defaults.js b/services/web/config/settings.defaults.js
+index 5d289236f0..f6df158fef 100644
+--- a/services/web/config/settings.defaults.js
++++ b/services/web/config/settings.defaults.js
+@@ -797,6 +797,11 @@ module.exports = {
+   appName: process.env.APP_NAME || 'Overleaf (Community Edition)',
+ 
+   adminEmail: process.env.ADMIN_EMAIL || 'placeholder@example.com',
++
++  allowedRegistrationDomains: process.env.OVERLEAF_ALLOWED_REGISTRATION_DOMAINS
++    ? process.env.OVERLEAF_ALLOWED_REGISTRATION_DOMAINS.split(',').map(d => d.trim().toLowerCase())
++    : undefined,
++
+   adminDomains: process.env.ADMIN_DOMAINS
+     ? JSON.parse(process.env.ADMIN_DOMAINS)
+     : undefined,
+-- 
+2.53.0
+
