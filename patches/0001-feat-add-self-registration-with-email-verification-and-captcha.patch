@@ -1,4 +1,4 @@
-From a754ed6c37f43d50275c02dd9f824d6be0d7dc5f Mon Sep 17 00:00:00 2001
+From 10bff6ca51efecfbbc72f41bc51abe5ae96325cc Mon Sep 17 00:00:00 2001
 From: Disyer <daniel@tohka.us>
 Date: Thu, 7 May 2026 13:01:35 +0300
 Subject: [PATCH] feat: add self-registration with email verification and
@@ -25,11 +25,11 @@ When unset, registration is open to all domains.
  .../PasswordReset/PasswordResetController.mjs |  6 ++
  .../src/Features/User/UserPagesController.mjs | 46 +++++++++++++
  services/web/app/src/router.mjs               | 15 +++++
- services/web/app/views/user/register.pug      | 64 +++++++++++++++---
+ services/web/app/views/user/register.pug      | 67 ++++++++++++++++---
  .../app/views/user/register_check_email.pug   | 20 ++++++
  services/web/config/settings.defaults.js      | 18 +++++
  services/web/locales/en.json                  |  8 ++-
- 9 files changed, 239 insertions(+), 11 deletions(-)
+ 9 files changed, 242 insertions(+), 11 deletions(-)
  create mode 100644 services/web/app/src/Features/Captcha/TurnstileMiddleware.mjs
  create mode 100644 services/web/app/views/user/register_check_email.pug
 
@@ -257,10 +257,10 @@ index 8e27a91563..37e4717486 100644
    }
  
 diff --git a/services/web/app/views/user/register.pug b/services/web/app/views/user/register.pug
-index b7e602e6e3..dee3559418 100644
+index b7e602e6e3..7bfffa9762 100644
 --- a/services/web/app/views/user/register.pug
 +++ b/services/web/app/views/user/register.pug
-@@ -24,13 +24,61 @@ block content
+@@ -24,13 +24,64 @@ block content
  							|
  							a(href='/login') #{translate("login_here")}
  
@@ -307,17 +307,20 @@ index b7e602e6e3..dee3559418 100644
 +						.cf-turnstile(data-sitekey=settings.turnstile.siteKey data-callback='onTurnstileSuccess' data-error-callback='onTurnstileError')
 +						script(nonce=scriptNonce).
 +							var turnstileForm = document.querySelector('form[name="registerForm"]')
-+							var submitBtn = document.querySelector('[type="submit"]')
++							function getSubmitBtn() { return document.querySelector('[type="submit"]') }
 +							window.onTurnstileSuccess = function() {
-+								submitBtn.disabled = false
++								var btn = getSubmitBtn()
++								if (btn) btn.disabled = false
 +							}
 +							window.onTurnstileError = function() {
-+								submitBtn.disabled = true
++								var btn = getSubmitBtn()
++								if (btn) btn.disabled = true
 +							}
 +							turnstileForm.addEventListener('idle', function() {
 +								setTimeout(function() {
 +									if (window.turnstile) turnstile.reset()
-+									submitBtn.disabled = true
++									var btn = getSubmitBtn()
++									if (btn) btn.disabled = true
 +								}, 0)
 +							})
 +					.actions
