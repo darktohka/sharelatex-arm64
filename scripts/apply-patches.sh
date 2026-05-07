@@ -29,6 +29,9 @@ git branch -D "$BRANCH" 2>/dev/null || true
 echo "Creating new branch '$BRANCH'..."
 git checkout -b "$BRANCH"
 
+git config user.email "patches@local"
+git config user.name "Patches"
+
 echo "Applying patches..."
 shopt -s nullglob
 patches=("$PATCHES_DIR"/*.patch)

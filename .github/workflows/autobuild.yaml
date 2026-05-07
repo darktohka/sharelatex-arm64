@@ -41,6 +41,8 @@ jobs:
         shell: bash
         working-directory: "${{ github.workspace }}/overleaf"
         run: |
+          git config user.email "patches@local"
+          git config user.name "Patches"
           shopt -s nullglob
           patches=("${{ github.workspace }}/repo/patches/"*.patch)
           if [ ${#patches[@]} -eq 0 ]; then
