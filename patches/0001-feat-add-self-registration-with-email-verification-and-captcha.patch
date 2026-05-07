@@ -1,4 +1,4 @@
-From 948b5b000233703747eda384f4dafb53fccf11cf Mon Sep 17 00:00:00 2001
+From a0c173e878218400fdee8dbc37b6f0eb74fc96bf Mon Sep 17 00:00:00 2001
 From: Disyer <daniel@tohka.us>
 Date: Thu, 7 May 2026 13:01:35 +0300
 Subject: [PATCH] feat: add self-registration with email verification and
@@ -232,7 +232,7 @@ index 8e27a91563..37e4717486 100644
    }
  
 diff --git a/services/web/app/views/user/register.pug b/services/web/app/views/user/register.pug
-index b7e602e6e3..6244a7336e 100644
+index b7e602e6e3..fb96ad2bd4 100644
 --- a/services/web/app/views/user/register.pug
 +++ b/services/web/app/views/user/register.pug
 @@ -24,13 +24,44 @@ block content
@@ -268,7 +268,7 @@ index b7e602e6e3..6244a7336e 100644
 +						| Invalid registration request.
 +					if showTurnstile
 +						script(src='https://challenges.cloudflare.com/turnstile/v0/api.js' async defer nonce=scriptNonce)
-+						.cf-turnstile(data-sitekey=settings.turnstile.siteKey data-size='invisible')
++						.cf-turnstile(data-sitekey=settings.turnstile.siteKey)
 +					.form-group
 +						label(for='email') #{translate("email")}
 +						input#email.form-control(
