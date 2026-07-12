@@ -1,4 +1,4 @@
-From 10bff6ca51efecfbbc72f41bc51abe5ae96325cc Mon Sep 17 00:00:00 2001
+From 56c53e27875bfd4a81b7636e1510e2aae149e8ed Mon Sep 17 00:00:00 2001
 From: Disyer <daniel@tohka.us>
 Date: Thu, 7 May 2026 13:01:35 +0300
 Subject: [PATCH] feat: add self-registration with email verification and
@@ -34,7 +34,7 @@ When unset, registration is open to all domains.
  create mode 100644 services/web/app/views/user/register_check_email.pug
 
 diff --git a/server-ce/config/settings.js b/server-ce/config/settings.js
-index 7d9fd7702e..54c2e406d3 100644
+index 160a0b8cb0..9d5c563632 100644
 --- a/server-ce/config/settings.js
 +++ b/server-ce/config/settings.js
 @@ -210,6 +210,12 @@ const settings = {
@@ -148,7 +148,7 @@ index 8079e54187..dc1fe1ea9a 100644
      if (error.name === 'NotFoundError') {
        return res.status(404).json({
 diff --git a/services/web/app/src/Features/User/UserPagesController.mjs b/services/web/app/src/Features/User/UserPagesController.mjs
-index ef7a5fd7e5..d4a5112b5b 100644
+index edf00d1960..dd4fccc712 100644
 --- a/services/web/app/src/Features/User/UserPagesController.mjs
 +++ b/services/web/app/src/Features/User/UserPagesController.mjs
 @@ -1,4 +1,5 @@
@@ -166,7 +166,7 @@ index ef7a5fd7e5..d4a5112b5b 100644
  
  async function settingsPage(req, res) {
    const userId = SessionManager.getLoggedInUserId(req.session)
-@@ -235,6 +238,46 @@ async function emailPreferencesPage(req, res) {
+@@ -239,6 +242,46 @@ async function emailPreferencesPage(req, res) {
    })
  }
  
@@ -213,7 +213,7 @@ index ef7a5fd7e5..d4a5112b5b 100644
  const UserPagesController = {
    accountSuspended: expressify(accountSuspended),
    logout: expressify(logout),
-@@ -255,6 +298,9 @@ const UserPagesController = {
+@@ -259,6 +302,9 @@ const UserPagesController = {
      })
    },
  
@@ -224,7 +224,7 @@ index ef7a5fd7e5..d4a5112b5b 100644
      // if user is being sent to /login with explicit redirect (redir=/foo),
      // such as being sent from the editor to /login, then set the redirect explicitly
 diff --git a/services/web/app/src/router.mjs b/services/web/app/src/router.mjs
-index 8e27a91563..37e4717486 100644
+index 251066a07d..e5c0f3c904 100644
 --- a/services/web/app/src/router.mjs
 +++ b/services/web/app/src/router.mjs
 @@ -58,6 +58,7 @@ import SystemMessageController from './Features/SystemMessages/SystemMessageCont
@@ -235,7 +235,7 @@ index 8e27a91563..37e4717486 100644
  import UnsupportedBrowserMiddleware from './infrastructure/UnsupportedBrowserMiddleware.mjs'
  import logger from '@overleaf/logger'
  import _ from 'lodash'
-@@ -284,6 +285,20 @@ async function initialize(webRouter, privateApiRouter, publicApiRouter) {
+@@ -288,6 +289,20 @@ async function initialize(webRouter, privateApiRouter, publicApiRouter) {
  
    if (Features.hasFeature('registration-page')) {
      webRouter.get('/register', UserPagesController.registerPage)
@@ -360,10 +360,10 @@ index 0000000000..47ea0c1d4f
 +							p
 +								a(href='/login') #{translate("login_here")}
 diff --git a/services/web/config/settings.defaults.js b/services/web/config/settings.defaults.js
-index 5d289236f0..c5df5f10dd 100644
+index b9f042af0f..5267f8d814 100644
 --- a/services/web/config/settings.defaults.js
 +++ b/services/web/config/settings.defaults.js
-@@ -797,6 +797,11 @@ module.exports = {
+@@ -821,6 +821,11 @@ module.exports = {
    appName: process.env.APP_NAME || 'Overleaf (Community Edition)',
  
    adminEmail: process.env.ADMIN_EMAIL || 'placeholder@example.com',
@@ -375,7 +375,7 @@ index 5d289236f0..c5df5f10dd 100644
    adminDomains: process.env.ADMIN_DOMAINS
      ? JSON.parse(process.env.ADMIN_DOMAINS)
      : undefined,
-@@ -841,6 +846,19 @@ module.exports = {
+@@ -865,6 +870,19 @@ module.exports = {
      },
    },
  
@@ -396,10 +396,10 @@ index 5d289236f0..c5df5f10dd 100644
  
    redirects: {
 diff --git a/services/web/locales/en.json b/services/web/locales/en.json
-index 88663462c9..38327e9139 100644
+index 8e4adaca57..ce605279e0 100644
 --- a/services/web/locales/en.json
 +++ b/services/web/locales/en.json
-@@ -324,7 +324,7 @@
+@@ -320,7 +320,7 @@
    "cancel_your_subscription": "Cancel your subscription",
    "cannot_invite_non_user": "Can’t send invite. Recipient must already have an __appName__ account",
    "cannot_invite_self": "Can’t send invite to yourself",
@@ -408,7 +408,7 @@ index 88663462c9..38327e9139 100644
    "cant_find_email": "That email address is not registered, sorry.",
    "cant_find_page": "Sorry, we can’t find the page you are looking for.",
    "cant_see_what_youre_looking_for_question": "Can’t see what you’re looking for?",
-@@ -2011,7 +2011,7 @@
+@@ -2054,7 +2054,7 @@
    "real_time_track_changes": "Real-time track-changes",
    "realtime_track_changes": "Real-time track changes",
    "reauthorize_github_account": "Reauthorize your GitHub Account",
@@ -417,7 +417,7 @@ index 88663462c9..38327e9139 100644
    "recent": "Recent",
    "recent_commits_in_github": "Recent commits in GitHub",
    "recommended": "Recommended",
-@@ -3164,5 +3164,7 @@
+@@ -3222,5 +3222,7 @@
    "zotero_reference_loading_error_forbidden": "Could not load references from Zotero, please re-link your account and try again",
    "zotero_sync_description": "With the Zotero integration you can import your references from Zotero into your __appName__ projects.",
    "zotero_upgrade_prompt_content": "Link your Zotero account to search and add your references from Zotero directly in your project—they’ll automatically be added to your .bib file. Or import them as a file into your __appName__ projects.",
@@ -427,5 +427,5 @@ index 88663462c9..38327e9139 100644
 +  "did_not_receive_email": "Did not receive the email? Check your spam folder or contact the administrator."
  }
 -- 
-2.53.0
+2.54.0
 
