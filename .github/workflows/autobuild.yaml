@@ -71,12 +71,14 @@ jobs:
         run: |
           curl -sL https://github.com/moby/buildkit/releases/download/v0.31.1/buildkit-v0.31.1.linux-amd64.tar.gz | sudo tar -xz  -C /usr && \
           sudo buildkitd &
+          sleep 1
       - name: Set up Buildkit (arm64)
         if: ${{ matrix.architecture == 'arm64' }}
         shell: bash
         run: |
           curl -sL https://github.com/moby/buildkit/releases/download/v0.31.1/buildkit-v0.31.1.linux-arm64.tar.gz | sudo tar -xz  -C /usr && \
           sudo buildkitd &
+          sleep 1
       - name: Build base image
         working-directory: "${{ github.workspace }}/overleaf"
         if: ${{ inputs.buildBaseImage }}
