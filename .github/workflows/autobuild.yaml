@@ -21,7 +21,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - runs-on: ARM64
+          - runs-on: ubuntu-26.04-arm
             architecture: arm64
             buildctl: "buildctl"
     runs-on: ${{ matrix.runs-on }}
@@ -65,11 +65,17 @@ jobs:
           mkdir -p ~/.docker
           jq --arg hostname "${{ secrets.DOCKER_HOST }}" --arg username "${{ secrets.DOCKER_USERNAME }}" --arg password "${{ secrets.DOCKER_PASSWORD }}" \
             '. + {"auths": (.auths + {($hostname): { "auth": "\($username):\($password)" | @base64 } } ) }' -n > ~/.docker/config.json
-      - name: Set up Buildkit
+      - name: Set up Buildkit (amd64)
         if: ${{ matrix.architecture == 'amd64' }}
         shell: bash
         run: |
-          curl -sL https://github.com/moby/buildkit/releases/download/v0.29.0/buildkit-v0.29.0.linux-amd64.tar.gz | sudo tar -xz  -C /usr && \
+          curl -sL https://github.com/moby/buildkit/releases/download/v0.31.1/buildkit-v0.31.1.linux-amd64.tar.gz | sudo tar -xz  -C /usr && \
+          sudo buildkitd &
+      - name: Set up Buildkit (arm64)
+        if: ${{ matrix.architecture == 'arm64' }}
+        shell: bash
+        run: |
+          curl -sL https://github.com/moby/buildkit/releases/download/v0.31.1/buildkit-v0.31.1.linux-arm64.tar.gz | sudo tar -xz  -C /usr && \
           sudo buildkitd &
       - name: Build base image
         working-directory: "${{ github.workspace }}/overleaf"
