@@ -23,7 +23,7 @@ jobs:
         include:
           - runs-on: ubuntu-26.04-arm
             architecture: arm64
-            buildctl: "buildctl"
+            buildctl: "sudo buildctl"
     runs-on: ${{ matrix.runs-on }}
     name: Build ${{ matrix.architecture }}
     steps:
