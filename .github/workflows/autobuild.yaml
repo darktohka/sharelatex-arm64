@@ -65,6 +65,16 @@ jobs:
           mkdir -p ~/.docker
           jq --arg hostname "${{ secrets.DOCKER_HOST }}" --arg username "${{ secrets.DOCKER_USERNAME }}" --arg password "${{ secrets.DOCKER_PASSWORD }}" \
             '. + {"auths": (.auths + {($hostname): { "auth": "\($username):\($password)" | @base64 } } ) }' -n > ~/.docker/config.json
+      - name: Test push access
+        shell: bash
+        if: ${{ inputs.buildBaseImage || inputs.buildImage }}
+        run: |
+          echo "FROM scratch" > /tmp/Dockerfile.testpush
+          echo "LABEL test-push=true" >> /tmp/Dockerfile.testpush
+          TEST_TAG="${{ secrets.DOCKER_TAG }}:test-push-${{ matrix.architecture }}"
+          docker build -t "$TEST_TAG" -f /tmp/Dockerfile.testpush .
+          docker push "$TEST_TAG"
+          docker rmi "$TEST_TAG" || true
       - name: Set up Buildkit (amd64)
         if: ${{ matrix.architecture == 'amd64' }}
         shell: bash
