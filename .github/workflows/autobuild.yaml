@@ -65,17 +65,6 @@ jobs:
           mkdir -p ~/.docker
           jq --arg hostname "${{ secrets.DOCKER_HOST }}" --arg username "${{ secrets.DOCKER_USERNAME }}" --arg password "${{ secrets.DOCKER_PASSWORD }}" \
             '. + {"auths": (.auths + {($hostname): { "auth": "\($username):\($password)" | @base64 } } ) }' -n > ~/.docker/config.json
-      - name: Test push access
-        shell: bash
-        if: ${{ inputs.buildBaseImage || inputs.buildImage }}
-        run: |
-          mkdir -p /tmp/testpush
-          printf 'FROM scratch\nLABEL test-push=true\n' > /tmp/testpush/Dockerfile
-          ${{ matrix.buildctl }} build \
-            --frontend dockerfile.v0 \
-            --local context=/tmp/testpush \
-            --local dockerfile=/tmp/testpush \
-            --output type=image,\"name=${{ secrets.DOCKER_TAG }}:test-push-${{ matrix.architecture }}\",push=true,store=false
       - name: Set up Buildkit (amd64)
         if: ${{ matrix.architecture == 'amd64' }}
         shell: bash
@@ -90,6 +79,17 @@ jobs:
           curl -sL https://github.com/moby/buildkit/releases/download/v0.31.1/buildkit-v0.31.1.linux-arm64.tar.gz | sudo tar -xz  -C /usr && \
           sudo buildkitd &
           sleep 1
+      - name: Test push access
+        shell: bash
+        if: ${{ inputs.buildBaseImage || inputs.buildImage }}
+        run: |
+          mkdir -p /tmp/testpush
+          printf 'FROM scratch\nLABEL test-push=true\n' > /tmp/testpush/Dockerfile
+          ${{ matrix.buildctl }} build \
+            --frontend dockerfile.v0 \
+            --local context=/tmp/testpush \
+            --local dockerfile=/tmp/testpush \
+            --output type=image,\"name=${{ secrets.DOCKER_TAG }}:test-push-${{ matrix.architecture }}\",push=true,store=false
       - name: Build base image
         working-directory: "${{ github.workspace }}/overleaf"
         if: ${{ inputs.buildBaseImage }}
