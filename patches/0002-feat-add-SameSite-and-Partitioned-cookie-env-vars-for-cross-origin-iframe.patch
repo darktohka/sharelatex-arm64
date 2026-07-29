@@ -1,0 +1,86 @@
+From: Disyer <daniel@tohka.us>
+Date: Sun, 12 Jul 2026 14:03:00 +0300
+Subject: [PATCH] feat: add SameSite and Partitioned cookie env vars for
+ cross-origin iframe embedding
+
+Add OVERLEAF_SAME_SITE_COOKIE env var to control the SameSite attribute
+of the session cookie. Setting this to 'none' (with OVERLEAF_SECURE_COOKIE=true)
+allows the Overleaf editor to be embedded in a cross-origin iframe.
+
+Add OVERLEAF_PARTITIONED_COOKIE env var to set the 'Partitioned' attribute
+on the session cookie for CHIPS support, required by some browsers when
+embedding in cross-site iframes.
+
+The 'Partitioned' attribute is not natively supported by any version of the
+'cookie' module (the project has three: 0.2.3, 0.4.1, ~0.7.1). Instead of
+patching a specific copy, a middleware intercepts res.setHeader('Set-Cookie')
+to append '; Partitioned' at the response level, catching cookies from all
+sources (express-session, res.cookie(), etc).
+
+diff --git a/server-ce/config/settings.js b/server-ce/config/settings.js
+index abc1234..def5678 100644
+--- a/server-ce/config/settings.js
++++ b/server-ce/config/settings.js
+@@ -241,6 +241,14 @@ const settings = {
+   // cookie with a secure flag (recommended).
+   secureCookie: process.env.OVERLEAF_SECURE_COOKIE != null,
+
++  // 'SameSite' cookie setting for cross-origin iframe support.
++  // 'lax' (default), 'none' (required for cross-origin iframes), or 'strict'
++  sameSiteCookie: process.env.OVERLEAF_SAME_SITE_COOKIE || 'lax',
++
++  // Set 'Partitioned' attribute on the session cookie for CHIPS support.
++  // Required when embedding in cross-site iframes with cookie partitioning.
++  partitionedCookie: process.env.OVERLEAF_PARTITIONED_COOKIE === 'true',
++
+   // If you are running Overleaf Community Edition behind a proxy (like Apache, Nginx, etc)
+   // then set this to true to allow it to correctly detect the forwarded IP
+   // address and http/https protocol information.
+diff --git a/services/web/config/settings.defaults.js b/services/web/config/settings.defaults.js
+index abc1234..def5678 100644
+--- a/services/web/config/settings.defaults.js
++++ b/services/web/config/settings.defaults.js
+@@ -707,6 +707,12 @@ const settings = {
+   // https://tools.ietf.org/html/draft-ietf-httpbis-rfc6265bis-03#section-4.1.2.7
+   sameSiteCookie: 'lax',
+
++  // Set the 'Partitioned' attribute on the session cookie for CHIPS support.
++  // Required when embedding in cross-site iframes with cookie partitioning.
++  // Turn on via OVERLEAF_PARTITIONED_COOKIE env var.
++  partitionedCookie: false,
++
+   // If you are running Overleaf behind a proxy (like Apache, Nginx, etc)
+   // then set this to true to allow it to correctly detect the forwarded IP
+   // address and http/https protocol information.
+diff --git a/services/web/app/src/infrastructure/Server.mjs b/services/web/app/src/infrastructure/Server.mjs
+index abc1234..def5678 100644
+--- a/services/web/app/src/infrastructure/Server.mjs
++++ b/services/web/app/src/infrastructure/Server.mjs
+@@ -185,6 +185,24 @@ await Modules.applyMiddleware(webRouter, 'sessionMiddleware', {
+   store: sessionStore,
+ })
+
++// Intercept Set-Cookie to append '; Partitioned' when enabled (CHIPS).
++// This must run before the session middleware so its Set-Cookie call
++// is patched. Patches res.setHeader per-request to catch cookies from
++// any source (express-session, res.cookie(), etc) regardless of which
++// version of the 'cookie' module generated them.
++const PartitionedCookieMiddleware = (req, res, next) => {
++  if (Settings.partitionedCookie) {
++    const origSetHeader = res.setHeader.bind(res)
++    res.setHeader = function (name, value) {
++      if (name.toLowerCase() === 'set-cookie') {
++        value = Array.isArray(value)
++          ? value.map(v => v + '; Partitioned')
++          : value + '; Partitioned'
++      }
++      return origSetHeader(name, value)
++    }
++  }
++  next()
++}
++webRouter.use(PartitionedCookieMiddleware)
++
+ webRouter.use(
+   session({
+     resave: false,
