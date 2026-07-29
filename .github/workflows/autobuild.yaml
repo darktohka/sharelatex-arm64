@@ -65,6 +65,8 @@ jobs:
           mkdir -p ~/.docker
           jq --arg hostname "${{ secrets.DOCKER_HOST }}" --arg username "${{ secrets.DOCKER_USERNAME }}" --arg password "${{ secrets.DOCKER_PASSWORD }}" \
             '. + {"auths": (.auths + {($hostname): { "auth": "\($username):\($password)" | @base64 } } ) }' -n > ~/.docker/config.json
+          sudo mkdir -p /root/.docker
+          sudo cp ~/.docker/config.json /root/.docker/config.json
       - name: Set up Buildkit (amd64)
         if: ${{ matrix.architecture == 'amd64' }}
         shell: bash
