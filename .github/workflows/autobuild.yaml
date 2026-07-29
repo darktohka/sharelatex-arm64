@@ -69,12 +69,13 @@ jobs:
         shell: bash
         if: ${{ inputs.buildBaseImage || inputs.buildImage }}
         run: |
-          echo "FROM scratch" > /tmp/Dockerfile.testpush
-          echo "LABEL test-push=true" >> /tmp/Dockerfile.testpush
-          TEST_TAG="${{ secrets.DOCKER_TAG }}:test-push-${{ matrix.architecture }}"
-          docker build -t "$TEST_TAG" -f /tmp/Dockerfile.testpush .
-          docker push "$TEST_TAG"
-          docker rmi "$TEST_TAG" || true
+          mkdir -p /tmp/testpush
+          printf 'FROM scratch\nLABEL test-push=true\n' > /tmp/testpush/Dockerfile
+          ${{ matrix.buildctl }} build \
+            --frontend dockerfile.v0 \
+            --local context=/tmp/testpush \
+            --local dockerfile=/tmp/testpush \
+            --output type=image,\"name=${{ secrets.DOCKER_TAG }}:test-push-${{ matrix.architecture }}\",push=true,store=false
       - name: Set up Buildkit (amd64)
         if: ${{ matrix.architecture == 'amd64' }}
         shell: bash
