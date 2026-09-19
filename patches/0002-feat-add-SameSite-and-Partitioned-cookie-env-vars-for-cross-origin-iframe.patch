@@ -1,7 +1,7 @@
-From 890c7e1ba7b013d0019577159763e896138bd5f0 Mon Sep 17 00:00:00 2001
+From 4b6527e60b9127b205df69c1e40d4c2abd2e84b1 Mon Sep 17 00:00:00 2001
 From: Disyer <daniel@tohka.us>
 Date: Sun, 12 Jul 2026 14:03:00 +0300
-Subject: [PATCH] feat: add SameSite and Partitioned cookie env vars for
+Subject: [PATCH 2/2] feat: add SameSite and Partitioned cookie env vars for
  cross-origin iframe embedding
 
 Add OVERLEAF_SAME_SITE_COOKIE env var to control the SameSite attribute
@@ -17,7 +17,6 @@ The 'Partitioned' attribute is not natively supported by any version of the
 patching a specific copy, a middleware intercepts res.setHeader('Set-Cookie')
 to append '; Partitioned' at the response level, catching cookies from all
 sources (express-session, res.cookie(), etc).
-
 ---
  server-ce/config/settings.js                  |  8 +++++++
  .../web/app/src/infrastructure/Server.mjs     | 22 +++++++++++++++++++
@@ -25,10 +24,10 @@ sources (express-session, res.cookie(), etc).
  3 files changed, 35 insertions(+)
 
 diff --git a/server-ce/config/settings.js b/server-ce/config/settings.js
-index 160a0b8cb0..7ea13af5db 100644
+index 67832fee6d..dca64da7b8 100644
 --- a/server-ce/config/settings.js
 +++ b/server-ce/config/settings.js
-@@ -242,6 +242,14 @@ const settings = {
+@@ -248,6 +248,14 @@ const settings = {
    // cookie with a secure flag (recommended).
    secureCookie: process.env.OVERLEAF_SECURE_COOKIE != null,
  
@@ -77,10 +76,10 @@ index 057dd51e60..42c370ceb8 100644
    session({
      resave: false,
 diff --git a/services/web/config/settings.defaults.js b/services/web/config/settings.defaults.js
-index b9f042af0f..4419e95aec 100644
+index c08e61739a..ba6a7e53db 100644
 --- a/services/web/config/settings.defaults.js
 +++ b/services/web/config/settings.defaults.js
-@@ -708,6 +708,11 @@ module.exports = {
+@@ -671,6 +671,11 @@ module.exports = {
    // https://tools.ietf.org/html/draft-ietf-httpbis-rfc6265bis-03#section-4.1.2.7
    sameSiteCookie: 'lax',
  
@@ -92,5 +91,3 @@ index b9f042af0f..4419e95aec 100644
    // If you are running Overleaf behind a proxy (like Apache, Nginx, etc)
    // then set this to true to allow it to correctly detect the forwarded IP
    // address and http/https protocol information.
--- 
-2.55.0
