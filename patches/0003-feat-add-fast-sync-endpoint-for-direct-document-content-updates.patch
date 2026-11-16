@@ -1,0 +1,131 @@
+From 1d549c0bec21f650480e17f48b3cf9a47e410f49 Mon Sep 17 00:00:00 2001
+From: Disyer <daniel@tohka.us>
+Date: Mon, 16 Nov 2026 14:25:00 +0300
+Subject: [PATCH] feat: add fast-sync endpoint for direct document content
+ updates
+
+Add POST /project/:Project_id/doc/:Doc_id/fast-sync, which accepts the full
+document content in a single request, writes it via
+DocumentUpdaterHandler.promises.setDocument and responds with the resulting
+document version. Intended for clients that regenerate whole documents rather
+than sending incremental ops.
+
+Requests whose path ends in /fast-sync are excluded from CSRF enforcement in
+Csrf.mjs so non-browser clients can post directly.
+---
+ .../Features/Editor/EditorHttpController.mjs  | 53 +++++++++++++++++++
+ .../app/src/Features/Editor/EditorRouter.mjs  |  6 +++
+ services/web/app/src/infrastructure/Csrf.mjs  |  2 +-
+ 3 files changed, 60 insertions(+), 1 deletion(-)
+
+diff --git a/services/web/app/src/Features/Editor/EditorHttpController.mjs b/services/web/app/src/Features/Editor/EditorHttpController.mjs
+index 06f5554538..38444adce0 100644
+--- a/services/web/app/src/Features/Editor/EditorHttpController.mjs
++++ b/services/web/app/src/Features/Editor/EditorHttpController.mjs
+@@ -11,6 +11,7 @@ import Errors from '../Errors/Errors.js'
+ import { expressify } from '@overleaf/promise-utils'
+ import Settings from '@overleaf/settings'
+ import CollaboratorsGetter from '../Collaborators/CollaboratorsGetter.mjs'
++import DocumentUpdaterHandler from '../DocumentUpdater/DocumentUpdaterHandler.mjs'
+ import { z, zz, parseReq } from '../../infrastructure/Validation.mjs'
+ 
+ const ProjectAccess = CollaboratorsGetter.ProjectAccess
+@@ -24,6 +25,7 @@ export default {
+   deleteDoc: expressify(deleteDoc),
+   deleteFile: expressify(deleteFile),
+   deleteFolder: expressify(deleteFolder),
++  fastSyncDoc: expressify(fastSyncDoc),
+   _nameIsAcceptableLength,
+ }
+ 
+@@ -345,6 +347,57 @@ async function _deleteEntity(req, res, entityType) {
+   res.sendStatus(204)
+ }
+ 
++const fastSyncSchema = z.object({
++  params: z.strictObject({
++    Project_id: zz.objectId(),
++    Doc_id: zz.objectId(),
++  }),
++  body: z.strictObject({
++    content: z.string(),
++    baseVersion: z.number().optional(),
++    source: z.string().optional(),
++  }),
++})
++
++async function fastSyncDoc(req, res, next) {
++  const { params, body } = parseReq(req, fastSyncSchema, { logOnly: true })
++  const projectId = params.Project_id
++  const docId = params.Doc_id
++  const { content, source } = body
++  const userId = SessionManager.getLoggedInUserId(req.session)
++  const lines = content.split('\n')
++
++  try {
++    const result = await DocumentUpdaterHandler.promises.setDocument(
++      projectId,
++      docId,
++      userId,
++      lines,
++      source || 'fast-sync',
++      false
++    )
++    let version = (result && (result.rev || result.v)) || 0
++    if (!version) {
++      try {
++        const docInfo = await DocumentUpdaterHandler.promises.getDocument(
++          projectId,
++          docId,
++          -1
++        )
++        version = docInfo.version
++      } catch (e) {
++        version = 1
++      }
++    }
++    res.json({
++      success: true,
++      version,
++    })
++  } catch (err) {
++    next(err)
++  }
++}
++
+ const supportedSpellCheckLanguages = new Set(
+   Settings.languages
+     // only include spell-check languages that are available in the client
+diff --git a/services/web/app/src/Features/Editor/EditorRouter.mjs b/services/web/app/src/Features/Editor/EditorRouter.mjs
+index 00c23f7fde..bf4469f17c 100644
+--- a/services/web/app/src/Features/Editor/EditorRouter.mjs
++++ b/services/web/app/src/Features/Editor/EditorRouter.mjs
+@@ -22,6 +22,12 @@ const rateLimiters = {
+ 
+ export default {
+   apply(webRouter, privateApiRouter) {
++    webRouter.post(
++      '/project/:Project_id/doc/:Doc_id/fast-sync',
++      AsyncLocalStorage.middleware,
++      AuthorizationMiddleware.ensureUserCanWriteProjectContent,
++      EditorHttpController.fastSyncDoc
++    )
+     webRouter.post(
+       '/project/:Project_id/doc',
+       AsyncLocalStorage.middleware,
+diff --git a/services/web/app/src/infrastructure/Csrf.mjs b/services/web/app/src/infrastructure/Csrf.mjs
+index ff746a8f23..205868c42e 100644
+--- a/services/web/app/src/infrastructure/Csrf.mjs
++++ b/services/web/app/src/infrastructure/Csrf.mjs
+@@ -95,7 +95,7 @@ export class Csrf {
+     // token' error from csurf and continue on...
+ 
+     // check whether the request method is excluded for the specified route
+-    if (this.excluded_routes[req.path]?.[req.method] === 1) {
++    if (this.excluded_routes[req.path]?.[req.method] === 1 || req.path.endsWith('/fast-sync')) {
+       // ignore the error if it's due to a bad csrf token, and continue
+       // without stripping `_csrf`: excluded routes still see their own
+       // separate enforcement further down their middleware stack (see
+-- 
+2.56.0
+
